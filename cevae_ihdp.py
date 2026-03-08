@@ -119,9 +119,9 @@ for i, (train, val, test, contfeats, binfeats) in enumerate(dataset.get_train_va
             score_te = eval_te.calc_stats(y1t, y0t)
 
             print(f"Epoch: {epoch + 1}/{epochs}, log p(x) >= {avg_loss:.3f}, "
-                  f"ite_tr: {score_tr[0]:.3f}, ate_tr: {score_tr[1]:.3f}, pehe_tr: {score_tr[2]:.3f}, "
+                  f"ite_tr: {score_tr[0]:.3f}, ate_tr: {score_tr[1]:.3f}, pehe_tr: {score_tr[2]:.3f}, att_tr: {score_tr[3]}"
                   f"rmse_f_tr: {rmses_tr[0]:.3f}, rmse_cf_tr: {rmses_tr[1]:.3f}, "
-                  f"ite_te: {score_te[0]:.3f}, ate_te: {score_te[1]:.3f}, pehe_te: {score_te[2]:.3f}")
+                  f"ite_te: {score_te[0]:.3f}, ate_te: {score_te[1]:.3f}, pehe_te: {score_te[2]:.3f}, att_te: {score_te[3]}")
 
     # restore best model
     if best_state is not None:

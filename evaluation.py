@@ -39,5 +39,10 @@ class Evaluator(object):
         ite = self.rmse_ite(ypred1, ypred0)
         ate = self.abs_ate(ypred1, ypred0)
         pehe = self.pehe(ypred1, ypred0)
-        return ite, ate, pehe
+
+        treated_idx = np.where(self.t == 1)[0]
+        true_att = np.mean(self.true_ite[treated_idx])
+        pred_ite = ypred1 - ypred0
+        pred_att = np.mean(pred_ite[treated_idx])
+        return ite, ate, pehe, np.abs(pred_att - true_att)
 
