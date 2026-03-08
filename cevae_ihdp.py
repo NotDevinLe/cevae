@@ -16,8 +16,8 @@ print_every = 10
 dataset = IHDP(replications=replications)
 
 # holds the ite, ate, and pehe so have three cols
-scores_test = np.zeros((replications, 3))
-scores_train = np.zeros((replications, 3))
+scores_test = np.zeros((replications, 4))
+scores_train = np.zeros((replications, 4))
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
