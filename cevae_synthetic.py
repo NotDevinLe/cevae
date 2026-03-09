@@ -1,157 +1,100 @@
-import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import sem
+from collections import OrderedDict
 
 from cevae import CEVAE
+from tarnet import TARNet
 from datasets import SyntheticDataset
 from evaluation import Evaluator
+from lr import LR1, LR2
 
-replications = 1
-epochs = 100
-lr = 1e-3
-wd = 1e-4
-early = 10
-print_every = 10
 
-dataset = SyntheticDataset(replications=replications)
+def run_experiment(dataset, epochs=100, learning_rate=1e-3, wd=1e-4,
+                   verbose=True):
+    """Run CEVAE, TARNet, LR-1, and LR-2 on *dataset*.
 
-scores_test = np.zeros((replications, 4))
-scores_train = np.zeros((replications, 4))
+    Returns ``{model_name: np.array(replications, 4)}`` where the four
+    columns are (ITE, ATE, PEHE, ATT) on the test set.
+    """
+    replications = dataset.replications
+    model_names = ['CEVAE', 'TARNet', 'LR-1', 'LR-2']
+    scores = {m: np.zeros((replications, 4)) for m in model_names}
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    for i, (train, val, test, contfeats, binfeats) in enumerate(
+        dataset.get_train_valid_test()
+    ):
+        if verbose:
+            print(f"\n--- Replication {i + 1}/{replications} ---")
 
-for i, (train, val, test, contfeats, binfeats) in enumerate(dataset.get_train_valid_test()):
-    print(f"\nReplication {i + 1}/{replications}")
+        (xtr, ttr, ytr), (_, mu0tr, mu1tr) = train
+        (xva, tva, yva), (_, mu0va, mu1va) = val
+        (xte, tte, yte), (y_cfte, mu0te, mu1te) = test
 
-    (xtr, ttr, ytr), (y_cftr, mu0tr, mu1tr) = train
-    (xva, tva, yva), (y_cfva, mu0va, mu1va) = val
-    (xte, tte, yte), (y_cfte, mu0te, mu1te) = test
+        perm = binfeats + contfeats
+        xtr, xva, xte = xtr[:, perm], xva[:, perm], xte[:, perm]
+        n_bin, n_cont = len(binfeats), len(contfeats)
 
-    perm = binfeats + contfeats
-    xtr, xva, xte = xtr[:, perm], xva[:, perm], xte[:, perm]
-    n_bin, n_cont = len(binfeats), len(contfeats)
+        xall = np.concatenate([xtr, xva])
+        tall = np.concatenate([ttr, tva])
+        yall = np.concatenate([ytr, yva])
 
-    xall = np.concatenate([xtr, xva])
-    tall = np.concatenate([ttr, tva])
-    yall = np.concatenate([ytr, yva])
+        eval_te = Evaluator(yte, tte, y_cf=y_cfte, mu0=mu0te, mu1=mu1te)
 
-    y_cf_all = np.concatenate([y_cftr, y_cfva])
-    mu0_all = np.concatenate([mu0tr, mu0va])
-    mu1_all = np.concatenate([mu1tr, mu1va])
+        # -- Build models --
+        models = OrderedDict([
+            ('CEVAE',  CEVAE(n_bin, n_cont)),
+            ('TARNet', TARNet(input_dim=n_bin + n_cont)),
+            ('LR-1',   LR1(outcome="binary")),
+            ('LR-2',   LR2(outcome="binary")),
+        ])
 
-    eval_tr = Evaluator(yall, tall, y_cf=y_cf_all, mu0=mu0_all, mu1=mu1_all)
-    eval_te = Evaluator(yte, tte, y_cf=y_cfte, mu0=mu0te, mu1=mu1te)
+        # -- Fit --
+        models['LR-1'].fit(xall, tall, yall)
+        models['LR-2'].fit(xall, tall, yall)
+        models['TARNet'].fit(xtr, ttr, ytr, xva, tva, yva,
+                             epochs=epochs, lr=learning_rate, wd=wd,
+                             verbose=verbose)
+        models['CEVAE'].fit(xtr, ttr, ytr, xva, tva, yva,
+                            epochs=epochs, lr=learning_rate, wd=wd,
+                            verbose=verbose)
 
-    ym, ys = ytr.mean(), ytr.std()
-    ytr, yva = (ytr - ym) / ys, (yva - ym) / ys
+        # -- Evaluate --
+        for name, model in models.items():
+            y0, y1 = model.predict(xte, y=yte)
+            scores[name][i, :] = eval_te.calc_stats(y1, y0)
+            if verbose:
+                s = scores[name][i]
+                print(f"[{name:8s}] ITE: {s[0]:.3f}  ATE: {s[1]:.3f}  "
+                      f"PEHE: {s[2]:.3f}  ATT: {s[3]:.3f}")
 
-    best_logp_valid = -np.inf
-    best_state = None
+    return scores
 
-    model = CEVAE(n_bin, n_cont).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=wd)
 
-    xtr_t = torch.tensor(xtr, dtype=torch.float32, device=device)
-    ttr_t = torch.tensor(ttr, dtype=torch.float32, device=device)
-    ytr_t = torch.tensor(ytr, dtype=torch.float32, device=device)
-    xva_t = torch.tensor(xva, dtype=torch.float32, device=device)
-    tva_t = torch.tensor(tva, dtype=torch.float32, device=device)
-    yva_t = torch.tensor(yva, dtype=torch.float32, device=device)
+# ------------------------------------------------------------------
+# Standalone run
+# ------------------------------------------------------------------
+if __name__ == '__main__':
+    dataset = SyntheticDataset(replications=1)
+    scores = run_experiment(dataset)
 
-    xall_t = torch.tensor(xall, dtype=torch.float32, device=device)
-    xte_t = torch.tensor(xte, dtype=torch.float32, device=device)
-    yall_norm_t = torch.tensor((yall - ym) / ys, dtype=torch.float32, device=device)
-    yte_norm_t = torch.tensor((yte - ym) / ys, dtype=torch.float32, device=device)
+    print('\n====== Final Test Scores ======')
+    for name, arr in scores.items():
+        m = arr.mean(axis=0)
+        print(f'{name:8s}  ITE: {m[0]:.3f}  ATE: {m[1]:.3f}  '
+              f'PEHE: {m[2]:.3f}  ATT: {m[3]:.3f}')
 
-    ate_train_hist = []
-    ate_test_hist = []
-    ate_epochs = []
+    names = list(scores.keys())
+    ates = [scores[n][:, 1].mean() for n in names]
 
-    n_iter_per_epoch = 10 * int(xtr.shape[0] / 100)
-    idx = np.arange(xtr.shape[0])
-
-    for epoch in range(epochs):
-        model.train()
-        np.random.shuffle(idx)
-        avg_loss = 0.0
-
-        for j in range(n_iter_per_epoch):
-            batch = np.random.choice(idx, 100)
-            xb = xtr_t[batch]
-            tb = ttr_t[batch]
-            yb = ytr_t[batch]
-
-            loss = model(xb, tb, yb)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            avg_loss += loss.item()
-
-        avg_loss /= n_iter_per_epoch
-
-        if epoch % early == 0 or epoch == epochs - 1:
-            model.eval()
-            logp_valid = model.log_p_valid(xva_t, tva_t, yva_t)
-            if logp_valid >= best_logp_valid:
-                print(f'Improved validation bound, old: {best_logp_valid:.3f}, new: {logp_valid:.3f}')
-                best_logp_valid = logp_valid
-                best_state = {k: v.clone() for k, v in model.state_dict().items()}
-
-        if epoch % print_every == 0:
-            model.eval()
-            y0, y1 = model.predict_y(xall_t, yall_norm_t)
-            y0, y1 = y0 * ys + ym, y1 * ys + ym
-            score_tr = eval_tr.calc_stats(y1, y0)
-
-            y0t, y1t = model.predict_y(xte_t, yte_norm_t)
-            y0t, y1t = y0t * ys + ym, y1t * ys + ym
-            score_te = eval_te.calc_stats(y1t, y0t)
-
-            ate_epochs.append(epoch + 1)
-            ate_train_hist.append(score_tr[1])
-            ate_test_hist.append(score_te[1])
-
-            print(f"Epoch: {epoch + 1}/{epochs}, log p(x) >= {avg_loss:.3f}, "
-                  f"ite_tr: {score_tr[0]:.3f}, ate_tr: {score_tr[1]:.3f}, pehe_tr: {score_tr[2]:.3f}, att_tr: {score_tr[3]:.3f}, "
-                  f"ite_te: {score_te[0]:.3f}, ate_te: {score_te[1]:.3f}, pehe_te: {score_te[2]:.3f}, att_te: {score_te[3]:.3f}")
-
-    if best_state is not None:
-        model.load_state_dict(best_state)
-    model.eval()
-
-    y0, y1 = model.predict_y(xall_t, yall_norm_t, n_samples=100)
-    y0, y1 = y0 * ys + ym, y1 * ys + ym
-    score = eval_tr.calc_stats(y1, y0)
-    scores_train[i, :] = score
-
-    y0t, y1t = model.predict_y(xte_t, yte_norm_t, n_samples=100)
-    y0t, y1t = y0t * ys + ym, y1t * ys + ym
-    score_test = eval_te.calc_stats(y1t, y0t)
-    scores_test[i, :] = score_test
-
-    print(f'Replication: {i + 1}/{replications}, tr_ite: {score[0]:.3f}, tr_ate: {score[1]:.3f}, '
-          f'tr_pehe: {score[2]:.3f}, te_ite: {score_test[0]:.3f}, te_ate: {score_test[1]:.3f}, '
-          f'te_pehe: {score_test[2]:.3f}')
-
-print('\nCEVAE model total scores')
-means, stds = np.mean(scores_train, axis=0), sem(scores_train, axis=0)
-print(f'train ITE: {means[0]:.3f}+-{stds[0]:.3f}, train ATE: {means[1]:.3f}+-{stds[1]:.3f}, '
-      f'train PEHE: {means[2]:.3f}+-{stds[2]:.3f}')
-
-means, stds = np.mean(scores_test, axis=0), sem(scores_test, axis=0)
-print(f'test ITE: {means[0]:.3f}+-{stds[0]:.3f}, test ATE: {means[1]:.3f}+-{stds[1]:.3f}, '
-      f'test PEHE: {means[2]:.3f}+-{stds[2]:.3f}')
-
-fig, ax = plt.subplots(figsize=(8, 5))
-ax.plot(ate_epochs, ate_train_hist, marker='o', label='Train ATE error')
-ax.plot(ate_epochs, ate_test_hist, marker='s', label='Test ATE error')
-ax.set_xlabel('Epoch')
-ax.set_ylabel('Absolute ATE Error')
-ax.set_title('CEVAE on Synthetic Data — ATE Error over Training')
-ax.legend()
-ax.grid(True, alpha=0.3)
-fig.tight_layout()
-fig.savefig('ate_error_synthetic.png', dpi=150)
-print('\nPlot saved to ate_error_synthetic.png')
-plt.show()
+    fig, ax = plt.subplots(figsize=(7, 4))
+    bars = ax.bar(names, ates, color=['C0', 'C1', 'C2', 'C3'])
+    ax.set_ylabel('Absolute ATE Error')
+    ax.set_title('Synthetic Data — Test ATE Error by Model')
+    for bar, v in zip(bars, ates):
+        ax.text(bar.get_x() + bar.get_width() / 2, v + 0.002,
+                f'{v:.3f}', ha='center', va='bottom', fontsize=10)
+    ax.grid(axis='y', alpha=0.3)
+    fig.tight_layout()
+    fig.savefig('ate_error_synthetic.png', dpi=150)
+    print('\nPlot saved to ate_error_synthetic.png')
+    plt.show()

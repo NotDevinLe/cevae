@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.distributions import Normal, Bernoulli, kl_divergence
@@ -114,3 +115,71 @@ class CEVAE(nn.Module):
             torch.stack(y0s).mean(0).cpu().numpy(),
             torch.stack(y1s).mean(0).cpu().numpy(),
         )
+
+    # ------------------------------------------------------------------
+    # High-level train / predict API
+    # ------------------------------------------------------------------
+
+    def fit(self, x_tr, t_tr, y_tr, x_va, t_va, y_va, *,
+            epochs=100, lr=1e-3, wd=1e-4, early=10,
+            batch_size=100, verbose=True, eval_callback=None):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.to(device)
+
+        self._ym, self._ys = float(y_tr.mean()), float(y_tr.std())
+        ytr_n = (y_tr - self._ym) / self._ys
+        yva_n = (y_va - self._ym) / self._ys
+
+        xtr_t = torch.tensor(x_tr, dtype=torch.float32, device=device)
+        ttr_t = torch.tensor(t_tr, dtype=torch.float32, device=device)
+        ytr_t = torch.tensor(ytr_n, dtype=torch.float32, device=device)
+        xva_t = torch.tensor(x_va, dtype=torch.float32, device=device)
+        tva_t = torch.tensor(t_va, dtype=torch.float32, device=device)
+        yva_t = torch.tensor(yva_n, dtype=torch.float32, device=device)
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=lr, weight_decay=wd)
+
+        n = x_tr.shape[0]
+        bs = min(batch_size, n)
+        n_iter = max(1, 10 * (n // bs))
+        idx = np.arange(n)
+        best_logp = -np.inf
+        best_state = None
+
+        for epoch in range(epochs):
+            self.train()
+            np.random.shuffle(idx)
+            for _ in range(n_iter):
+                b = np.random.choice(idx, bs)
+                loss = self.forward(xtr_t[b], ttr_t[b], ytr_t[b])
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+            if epoch % early == 0 or epoch == epochs - 1:
+                self.eval()
+                logp = self.log_p_valid(xva_t, tva_t, yva_t)
+                if logp >= best_logp:
+                    if verbose:
+                        print(f'[CEVAE] Epoch {epoch+1}: val bound '
+                              f'{best_logp:.3f} -> {logp:.3f}')
+                    best_logp = logp
+                    best_state = {k: v.clone()
+                                  for k, v in self.state_dict().items()}
+
+            if eval_callback and epoch % early == 0:
+                self.eval()
+                eval_callback(epoch + 1, self)
+
+        if best_state is not None:
+            self.load_state_dict(best_state)
+        self.eval()
+
+    def predict(self, x, y=None, n_samples=100):
+        """Numpy in / numpy out.  Returns *(y0, y1)* on the original scale."""
+        device = next(self.parameters()).device
+        x_t = torch.tensor(x, dtype=torch.float32, device=device)
+        y_t = torch.tensor((y - self._ym) / self._ys,
+                           dtype=torch.float32, device=device)
+        y0, y1 = self.predict_y(x_t, y_t, n_samples=n_samples)
+        return y0 * self._ys + self._ym, y1 * self._ys + self._ym
