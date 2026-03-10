@@ -11,8 +11,9 @@ A PyTorch implementation of the **Causal Effect Variational Autoencoder** (Louiz
 ├── evaluation.py             # Evaluator — ITE, ATE, PEHE, ATT metrics
 ├── datasets.py               # Dataset loaders: IHDP, SyntheticDataset, TwinsDataset
 │
-├── cevae_synthetic.py        # Run all four models on synthetic data
-├── cevae_ihdp.py             # Run CEVAE on IHDP (10 replications)
+├── run_experiment.py         # ★ Unified CLI runner — pick models, dataset, hyperparams
+├── cevae_synthetic.py        # Thin wrapper (backward compat)
+├── cevae_ihdp.py             # Thin wrapper (backward compat)
 ├── run_sample_size_experiments.py  # Sweep sample sizes on synthetic data
 │
 └── datasets/
@@ -50,11 +51,14 @@ A binary-confounder DGP where the hidden variable z drives both treatment and ou
 - t ~ Bernoulli(0.75z + 0.25(1−z))
 - y ~ Bernoulli(σ(3(z + 2(2t−1))))
 
-Can be loaded from JSON or generated in-memory at any sample size:
+Can be loaded from JSON or generated in-memory at any sample size.
+Supports a **binary proxy noise model** for ablation studies: each proxy
+is a noisy copy of z, flipped with probability `flip_prob`.
 
 ```python
-SyntheticDataset(path_data="datasets/synthetic_data.json")  # from file
+SyntheticDataset(path_data="datasets/synthetic_data.json")  # from file (continuous proxy)
 SyntheticDataset(n=5000, seed=42)                            # generate on the fly
+SyntheticDataset(n=5000, flip_prob=0.2, n_proxies=5)         # 5 binary proxies, 20% noise
 ```
 
 ### IHDP (`datasets.py → IHDP`)
@@ -93,26 +97,77 @@ model.fit(x, t, y)
 
 ## Running Experiments
 
-**Synthetic — all models, single run:**
+All experiments go through **`run_experiment.py`**, which lets you pick the
+dataset, models, and hyperparameters from the command line.
+
+### Experiment 1 — Synthetic noise sweep
+
+Sweep over proxy noise levels to show CEVAE's robustness to degraded
+proxy variables.  Produces a line plot of ATE error vs flip probability.
 
 ```bash
-python cevae_synthetic.py
+python run_experiment.py --dataset synthetic --models all \
+    --sweep-noise 0.0 0.05 0.1 0.15 0.2 0.25 0.3 0.35 0.4 0.45 \
+    -n 10000 --n-proxies 5 --quiet
 ```
 
-Trains CEVAE, TARNet, LR-1, and LR-2, prints test ITE/ATE/PEHE/ATT, and saves a bar chart to `ate_error_synthetic.png`.
+### Experiment 2 — IHDP benchmark
 
-**Synthetic — sample-size sweep:**
+Run all models on IHDP across 10 replications.  Prints a paper-style
+table with in-sample and out-of-sample ε_ATE and √PEHE.
 
 ```bash
-python run_sample_size_experiments.py
+python run_experiment.py --dataset ihdp --models all --replications 10
 ```
 
-Runs all four models at n = 500, 1000, 2000, 5000, 10000 and plots ATE error vs. sample size to `ate_vs_sample_size.png`.
-
-**IHDP — CEVAE only:**
+### More examples
 
 ```bash
-python cevae_ihdp.py
+# See all options
+python run_experiment.py --help
+
+# Run only CEVAE and TARNet on IHDP
+python run_experiment.py --dataset ihdp --models cevae tarnet --replications 10
+
+# Run all four models on synthetic data
+python run_experiment.py --dataset synthetic --models all
+
+# Single experiment with binary proxies at a specific noise level
+python run_experiment.py --dataset synthetic --models all --flip-prob 0.2 -n 5000
+
+# Sample-size sweep
+python run_experiment.py --dataset synthetic --models cevae tarnet --sweep-sizes 500 1000 5000 10000
+
+# Save a bar chart
+python run_experiment.py --dataset ihdp --models all --save-plot results.png
+
+# Suppress per-epoch output
+python run_experiment.py --dataset ihdp --models cevae --quiet
 ```
 
-Runs CEVAE across 10 IHDP replications and reports aggregate ITE/ATE/PEHE.
+### Key flags
+
+| Flag | Description |
+|------|-------------|
+| `--dataset {synthetic,ihdp}` | Which benchmark to use |
+| `--models {cevae,tarnet,lr1,lr2,all}` | One or more models (space-separated) |
+| `--epochs`, `--lr`, `--wd`, `--batch-size` | Training hyperparameters |
+| `--replications` | Number of data splits (default: 1 synthetic, 10 IHDP) |
+| `-n` | Synthetic sample size (omit to use `datasets/synthetic_data.json`) |
+| `--flip-prob P` | Use binary proxy model with this noise/flip probability |
+| `--n-proxies N` | Number of binary proxy variables (default: 5) |
+| `--sweep-sizes N [N ...]` | Sweep over sample sizes |
+| `--sweep-noise P [P ...]` | Sweep over proxy flip probabilities |
+| `--save-plot PATH` | Save an ATE bar chart (or sweep line plot) |
+| `--quiet` | Suppress per-epoch training logs |
+
+### Legacy scripts (still work)
+
+The old entry points delegate to `run_experiment.py` and are kept for
+backward compatibility:
+
+```bash
+python cevae_synthetic.py          # same as --dataset synthetic --models all
+python cevae_ihdp.py               # same as --dataset ihdp --models cevae --replications 10
+python run_sample_size_experiments.py  # sample-size sweep, all models
+```

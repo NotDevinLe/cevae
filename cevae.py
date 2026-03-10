@@ -67,13 +67,13 @@ class CEVAE(nn.Module):
         z = qz.sample()  # sample from the normal distribution that we found in our encoder
         xb_lo, xc_mu, xc_sig, t_lo, y_mu = self.decode(z, t)
 
-        # grab the features according to their data type
-        x_cont = x[:, self.n_bin :]
-
         # p(x,t,y|z)
-        log_p = Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
+        log_p = torch.zeros(x.shape[0], device=x.device)
+        if self.n_cont > 0:
+            x_cont = x[:, self.n_bin:]
+            log_p = log_p + Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
         if xb_lo is not None:
-            x_bin = x[:, : self.n_bin]
+            x_bin = x[:, :self.n_bin]
             log_p = log_p + Bernoulli(logits=xb_lo).log_prob(x_bin).sum(1)
         log_p = (
             log_p
@@ -93,10 +93,12 @@ class CEVAE(nn.Module):
         z = qz.mean
         xb_lo, xc_mu, xc_sig, t_lo, y_mu = self.decode(z, t)
 
-        x_cont = x[:, self.n_bin :]
-        log_p = Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
+        log_p = torch.zeros(x.shape[0], device=x.device)
+        if self.n_cont > 0:
+            x_cont = x[:, self.n_bin:]
+            log_p = log_p + Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
         if xb_lo is not None:
-            x_bin = x[:, : self.n_bin]
+            x_bin = x[:, :self.n_bin]
             log_p = log_p + Bernoulli(logits=xb_lo).log_prob(x_bin).sum(1)
         log_p = (
             log_p
