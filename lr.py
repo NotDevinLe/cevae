@@ -65,16 +65,28 @@ class LR2:
         if self.outcome == "binary":
             y_flat = y_flat.astype(int)
         idx0, idx1 = t_flat == 0, t_flat == 1
-        self.model_0.fit(x[idx0], y_flat[idx0])
-        self.model_1.fit(x[idx1], y_flat[idx1])
+        self._const_0 = self._fit_arm(self.model_0, x[idx0], y_flat[idx0])
+        self._const_1 = self._fit_arm(self.model_1, x[idx1], y_flat[idx1])
+
+    @staticmethod
+    def _fit_arm(model, x, y):
+        """Fit one arm; return the constant class value if only one class present."""
+        classes = np.unique(y)
+        if len(classes) < 2 and isinstance(model, LogisticRegression):
+            return float(classes[0])
+        model.fit(x, y)
+        return None
+
+    def _predict_arm(self, model, const, x):
+        if const is not None:
+            return np.full((x.shape[0], 1), const)
+        if self.outcome == "binary":
+            return model.predict_proba(x)[:, 1][:, np.newaxis]
+        return model.predict(x)[:, np.newaxis]
 
     def predict(self, x, y=None, n_samples=None):
-        if self.outcome == "binary":
-            y0 = self.model_0.predict_proba(x)[:, 1][:, np.newaxis]
-            y1 = self.model_1.predict_proba(x)[:, 1][:, np.newaxis]
-        else:
-            y0 = self.model_0.predict(x)[:, np.newaxis]
-            y1 = self.model_1.predict(x)[:, np.newaxis]
+        y0 = self._predict_arm(self.model_0, self._const_0, x)
+        y1 = self._predict_arm(self.model_1, self._const_1, x)
         return y0, y1
 
     predict_y = predict

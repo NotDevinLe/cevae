@@ -35,6 +35,52 @@ class IHDP(object):
             yield train, valid, test, self.contfeats, self.binfeats
 
 
+class Jobs:
+    def __init__(self, path_data="datasets/jobs", replications=10):
+        self.path_data = path_data
+        self.replications = min(replications, 10)
+
+        train_npz = np.load(f"{path_data}/jobs_DW_bin.new.10.train.npz")
+        test_npz = np.load(f"{path_data}/jobs_DW_bin.new.10.test.npz")
+        self.true_ate = float(train_npz['ate'][0, 0])
+
+        self._train = {k: train_npz[k] for k in train_npz}
+        self._test = {k: test_npz[k] for k in test_npz}
+
+        x0 = self._train['x'][:, :, 0]
+        self.binfeats = []
+        self.contfeats = []
+        for j in range(x0.shape[1]):
+            uniq = np.unique(x0[:, j])
+            if len(uniq) <= 2 and all(v in (0.0, 1.0) for v in uniq):
+                self.binfeats.append(j)
+            else:
+                self.contfeats.append(j)
+
+    def get_train_valid_test(self):
+        for i in range(self.replications):
+            x_tr_full = self._train['x'][:, :, i]
+            t_tr_full = self._train['t'][:, i:i+1]
+            y_tr_full = self._train['yf'][:, i:i+1]
+            e_tr_full = self._train['e'][:, i:i+1]
+
+            x_te = self._test['x'][:, :, i]
+            t_te = self._test['t'][:, i:i+1]
+            y_te = self._test['yf'][:, i:i+1]
+            e_te = self._test['e'][:, i:i+1]
+
+            itr, iva = train_test_split(
+                np.arange(x_tr_full.shape[0]), test_size=0.3, random_state=i
+            )
+
+            train = (x_tr_full[itr], t_tr_full[itr], y_tr_full[itr],
+                     e_tr_full[itr])
+            valid = (x_tr_full[iva], t_tr_full[iva], y_tr_full[iva],
+                     e_tr_full[iva])
+            test = (x_te, t_te, y_te, e_te)
+            yield train, valid, test, self.contfeats, self.binfeats
+
+
 class SyntheticDataset(object):
     def __init__(self, path_data=None, n=None, replications=1, seed=42,
                  flip_prob=None, n_proxies=None):

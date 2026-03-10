@@ -9,4 +9,4 @@ compatibility.  Prefer using the unified runner directly::
 from run_experiment import main
 
 if __name__ == "__main__":
-    main(["--dataset", "ihdp", "--models", "cevae", "--replications", "10"])
+    main(["--dataset", "ihdp", "--models", "tarnet", "--replications", "10"])

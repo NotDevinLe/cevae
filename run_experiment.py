@@ -20,6 +20,9 @@ Examples
 # Single experiment with binary proxy model at a specific noise level:
     python run_experiment.py --dataset synthetic --models all --flip-prob 0.2 -n 5000
 
+# Run all models on Jobs dataset:
+    python run_experiment.py --dataset jobs --models all --replications 10
+
 # Save a bar plot of ATE errors:
     python run_experiment.py --dataset ihdp --models all --save-plot results.png
 """
@@ -37,14 +40,15 @@ from scipy.stats import sem
 from cevae import CEVAE
 from tarnet import TARNet
 from lr import LR1, LR2
-from datasets import IHDP, SyntheticDataset
-from evaluation import Evaluator
+from datasets import IHDP, SyntheticDataset, Jobs
+from evaluation import Evaluator, JobsEvaluator
 
 ALL_MODELS = ["cevae", "tarnet", "lr1", "lr2"]
 
 OUTCOME_TYPE = {
     "synthetic": "binary",
     "ihdp": "continuous",
+    "jobs": "binary",
 }
 
 DISPLAY_NAMES = {
@@ -132,6 +136,70 @@ def run(dataset, model_names, outcome, *, epochs=100, lr=1e-3, wd=1e-4,
     return scores
 
 
+def run_jobs(dataset, model_names, *, epochs=100, lr=1e-3, wd=1e-4,
+             batch_size=100, verbose=True):
+    """Train and evaluate *model_names* on the Jobs dataset.
+
+    Returns ``{name: {'train': np.array(R,3), 'test': np.array(R,3)}}``
+    where the three columns are (R_pol, ATE_err, ATT_err).
+    """
+    replications = dataset.replications
+    true_ate = dataset.true_ate
+    scores = {
+        m: {
+            "train": np.zeros((replications, 3)),
+            "test":  np.zeros((replications, 3)),
+        }
+        for m in model_names
+    }
+
+    for i, (train, valid, test, contfeats, binfeats) in enumerate(
+        dataset.get_train_valid_test()
+    ):
+        if verbose:
+            print(f"\n--- Replication {i + 1}/{replications} ---")
+
+        xtr, ttr, ytr, etr = train
+        xva, tva, yva, eva = valid
+        xte, tte, yte, ete = test
+
+        perm = binfeats + contfeats
+        xtr, xva, xte = xtr[:, perm], xva[:, perm], xte[:, perm]
+        n_bin, n_cont = len(binfeats), len(contfeats)
+
+        xall = np.concatenate([xtr, xva])
+        tall = np.concatenate([ttr, tva])
+        yall = np.concatenate([ytr, yva])
+        eall = np.concatenate([etr, eva])
+
+        eval_tr = JobsEvaluator(yall, tall, eall, true_ate)
+        eval_te = JobsEvaluator(yte, tte, ete, true_ate)
+
+        models = build_models(model_names, n_bin, n_cont, "binary")
+
+        for name, model in models.items():
+            if name in ("lr1", "lr2"):
+                model.fit(xall, tall, yall)
+            else:
+                model.fit(xtr, ttr, ytr, xva, tva, yva,
+                          epochs=epochs, lr=lr, wd=wd,
+                          batch_size=batch_size, verbose=verbose)
+
+        for name, model in models.items():
+            y0_te, y1_te = model.predict(xte, y=yte)
+            scores[name]["test"][i, :] = eval_te.calc_stats(y1_te, y0_te)
+
+            y0_tr, y1_tr = model.predict(xall, y=yall)
+            scores[name]["train"][i, :] = eval_tr.calc_stats(y1_tr, y0_tr)
+
+            if verbose:
+                s = scores[name]["test"][i]
+                print(f"[{name:8s}] R_pol: {s[0]:.3f}  "
+                      f"ATE: {s[1]:.3f}  ATT: {s[2]:.3f}")
+
+    return scores
+
+
 # ------------------------------------------------------------------
 # Output helpers
 # ------------------------------------------------------------------
@@ -180,6 +248,34 @@ def print_summary(scores):
         parts = [f"{c}: {m:.3f}\u00b1{s:.3f}" for c, m, s in zip(cols, means, stds)]
         label = DISPLAY_NAMES.get(name, name)
         print(f"  {label:8s}  {',  '.join(parts)}")
+
+
+def print_jobs_table(scores):
+    """Paper-style table for Jobs: R_pol, e_ATE, e_ATT."""
+    col_w = 14
+    name_w = 10
+    header = (f"{'Method':<{name_w}s} | "
+              f"{'In-sample':^{3 * col_w + 2}s} | "
+              f"{'Out-of-sample':^{3 * col_w + 2}s}")
+    sub = (f"{'':>{name_w}s} | "
+           f"{'R_pol':>{col_w}s} {'e_ATE':>{col_w}s} {'e_ATT':>{col_w}s} | "
+           f"{'R_pol':>{col_w}s} {'e_ATE':>{col_w}s} {'e_ATT':>{col_w}s}")
+    width = len(header)
+    sep = "-" * width
+
+    print(f"\n{sep}")
+    print(header)
+    print(sub)
+    print(sep)
+    for name, d in scores.items():
+        tr, te = d["train"], d["test"]
+        label = DISPLAY_NAMES.get(name, name)
+        print(f"{label:<{name_w}s} | "
+              f"{_fmt(tr, 0):>{col_w}s} {_fmt(tr, 1):>{col_w}s} "
+              f"{_fmt(tr, 2):>{col_w}s} | "
+              f"{_fmt(te, 0):>{col_w}s} {_fmt(te, 1):>{col_w}s} "
+              f"{_fmt(te, 2):>{col_w}s}")
+    print(sep)
 
 
 # ------------------------------------------------------------------
@@ -245,7 +341,8 @@ def parse_args(argv=None):
         epilog=__doc__,
     )
 
-    p.add_argument("--dataset", choices=["synthetic", "ihdp"], default="synthetic",
+    p.add_argument("--dataset", choices=["synthetic", "ihdp", "jobs"],
+                   default="synthetic",
                    help="Which dataset to use (default: synthetic)")
     p.add_argument("--models", nargs="+", default=["all"],
                    choices=ALL_MODELS + ["all"],
@@ -272,6 +369,10 @@ def parse_args(argv=None):
     g3.add_argument("--ihdp-path", default="datasets/IHDP/csv",
                     help="Path to IHDP CSV folder")
 
+    g3b = p.add_argument_group("Jobs dataset options")
+    g3b.add_argument("--jobs-path", default="datasets/jobs",
+                     help="Path to Jobs NPZ folder")
+
     g4 = p.add_argument_group("sample-size sweep (synthetic only)")
     g4.add_argument("--sweep-sizes", nargs="+", type=int, default=None,
                     metavar="N",
@@ -294,7 +395,7 @@ def parse_args(argv=None):
     args.models = [m.lower().replace("-", "") for m in args.models]
 
     if args.replications is None:
-        args.replications = 10 if args.dataset == "ihdp" else 1
+        args.replications = 10 if args.dataset in ("ihdp", "jobs") else 1
 
     return args
 
@@ -307,6 +408,9 @@ def make_dataset(args, n_override=None):
         return SyntheticDataset(n=n, seed=args.seed,
                                 replications=args.replications,
                                 flip_prob=flip_prob, n_proxies=n_proxies)
+    elif args.dataset == "jobs":
+        return Jobs(path_data=args.jobs_path,
+                    replications=args.replications)
     else:
         return IHDP(path_data=args.ihdp_path, replications=args.replications)
 
@@ -378,11 +482,17 @@ def main(argv=None):
 
     # --- Standard single experiment ---
     ds = make_dataset(args)
-    scores = run(ds, args.models, outcome,
-                 epochs=args.epochs, lr=args.lr, wd=args.wd,
-                 batch_size=args.batch_size, verbose=verbose)
 
-    print_table(scores)
+    if args.dataset == "jobs":
+        scores = run_jobs(ds, args.models,
+                          epochs=args.epochs, lr=args.lr, wd=args.wd,
+                          batch_size=args.batch_size, verbose=verbose)
+        print_jobs_table(scores)
+    else:
+        scores = run(ds, args.models, outcome,
+                     epochs=args.epochs, lr=args.lr, wd=args.wd,
+                     batch_size=args.batch_size, verbose=verbose)
+        print_table(scores)
 
     if args.save_plot:
         title = f"{args.dataset.upper()} \u2014 ATE Error by Model"
