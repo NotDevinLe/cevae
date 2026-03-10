@@ -22,7 +22,7 @@ class CEVAE(nn.Module):
         x_dim = n_bin + n_cont
 
         # p(x, t, y | z)
-        self.p_x_bin = mlp(d, [h] * nh, n_bin) # p(x|z) for binary
+        self.p_x_bin = mlp(d, [h] * nh, n_bin) if n_bin > 0 else None
         self.p_x_mu = mlp(d, [h] * nh, n_cont) #p(x|z) for continuous and gaussian
         self.p_x_sig = mlp(d, [h] * nh, n_cont, nn.Softplus()) # connects to above
         self.p_t = mlp(d, [h], 1) # p(t|z)
@@ -53,7 +53,7 @@ class CEVAE(nn.Module):
         return qt, qy, qz
 
     def decode(self, z, t):
-        x_bin_logits = self.p_x_bin(z)
+        x_bin_logits = self.p_x_bin(z) if self.p_x_bin is not None else None
         x_cont_mu = self.p_x_mu(z)
         x_cont_sig = self.p_x_sig(z)
 
@@ -68,12 +68,15 @@ class CEVAE(nn.Module):
         xb_lo, xc_mu, xc_sig, t_lo, y_mu = self.decode(z, t)
 
         # grab the features according to their data type
-        x_bin, x_cont = x[:, : self.n_bin], x[:, self.n_bin :]
+        x_cont = x[:, self.n_bin :]
 
         # p(x,t,y|z)
+        log_p = Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
+        if xb_lo is not None:
+            x_bin = x[:, : self.n_bin]
+            log_p = log_p + Bernoulli(logits=xb_lo).log_prob(x_bin).sum(1)
         log_p = (
-            Bernoulli(logits=xb_lo).log_prob(x_bin).sum(1)
-            + Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
+            log_p
             + Bernoulli(logits=t_lo).log_prob(t).sum(1)
             + Normal(y_mu, 1.0).log_prob(y).sum(1)
         )
@@ -90,10 +93,13 @@ class CEVAE(nn.Module):
         z = qz.mean
         xb_lo, xc_mu, xc_sig, t_lo, y_mu = self.decode(z, t)
 
-        x_bin, x_cont = x[:, : self.n_bin], x[:, self.n_bin :]
+        x_cont = x[:, self.n_bin :]
+        log_p = Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
+        if xb_lo is not None:
+            x_bin = x[:, : self.n_bin]
+            log_p = log_p + Bernoulli(logits=xb_lo).log_prob(x_bin).sum(1)
         log_p = (
-            Bernoulli(logits=xb_lo).log_prob(x_bin).sum(1)
-            + Normal(xc_mu, xc_sig).log_prob(x_cont).sum(1)
+            log_p
             + Bernoulli(logits=t_lo).log_prob(t).sum(1)
             + Normal(y_mu, 1.0).log_prob(y).sum(1)
         )
