@@ -18,7 +18,7 @@ def sigmoid(x):
 for i in range(n):
     x[i] = np.random.normal(z[i], sigma_z1 * z[i] + sigma_z0 * (1 - z[i]))
     t[i] = np.random.binomial(1, 0.75 * z[i] + 0.25 * (1 - z[i]))
-    y[i] = np.random.binomial(1, sigmoid(3 * (z[i] + 2 * (2 * t[i] - 1))))
+    y[i] = np.random.binomial(1, sigmoid(3 * (z[i] + 2 * (t[i] - 1))))
 
     res.append([int(z[i]), int(x[i]), int(t[i]), int(y[i])])
 

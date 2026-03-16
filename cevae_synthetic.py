@@ -10,14 +10,22 @@ from lr import LR1, LR2
 
 
 def run_experiment(dataset, epochs=100, learning_rate=1e-3, wd=1e-4,
-                   verbose=True):
-    """Run CEVAE, TARNet, LR-1, and LR-2 on *dataset*.
+                   models=None, verbose=True):
+    """Run selected models on *dataset*.
+
+    Args:
+        dataset: SyntheticDataset instance
+        epochs: training epochs for CEVAE/TARNet
+        learning_rate: learning rate for CEVAE/TARNet
+        wd: weight decay for CEVAE/TARNet
+        models: list of model names to run (default: all four)
 
     Returns ``{model_name: np.array(replications, 4)}`` where the four
     columns are (ITE, ATE, PEHE, ATT) on the test set.
     """
+    all_models = ['CEVAE', 'TARNet', 'LR-1', 'LR-2']
+    model_names = models if models is not None else all_models
     replications = dataset.replications
-    model_names = ['CEVAE', 'TARNet', 'LR-1', 'LR-2']
     scores = {m: np.zeros((replications, 4)) for m in model_names}
 
     for i, (train, val, test, contfeats, binfeats) in enumerate(
@@ -41,22 +49,27 @@ def run_experiment(dataset, epochs=100, learning_rate=1e-3, wd=1e-4,
         eval_te = Evaluator(yte, tte, y_cf=y_cfte, mu0=mu0te, mu1=mu1te)
 
         # -- Build models --
-        models = OrderedDict([
-            ('CEVAE',  CEVAE(n_bin, n_cont)),
-            ('TARNet', TARNet(input_dim=n_bin + n_cont)),
-            ('LR-1',   LR1(outcome="binary")),
-            ('LR-2',   LR2(outcome="binary")),
+        model_factories = OrderedDict([
+            ('CEVAE',  lambda: CEVAE(n_bin, n_cont)),
+            ('TARNet', lambda: TARNet(input_dim=n_bin + n_cont)),
+            ('LR-1',   lambda: LR1(outcome="binary")),
+            ('LR-2',   lambda: LR2(outcome="binary")),
         ])
+        models = OrderedDict((n, model_factories[n]()) for n in model_names)
 
         # -- Fit --
-        models['LR-1'].fit(xall, tall, yall)
-        models['LR-2'].fit(xall, tall, yall)
-        models['TARNet'].fit(xtr, ttr, ytr, xva, tva, yva,
-                             epochs=epochs, lr=learning_rate, wd=wd,
-                             verbose=verbose)
-        models['CEVAE'].fit(xtr, ttr, ytr, xva, tva, yva,
-                            epochs=epochs, lr=learning_rate, wd=wd,
-                            verbose=verbose)
+        if 'LR-1' in models:
+            models['LR-1'].fit(xall, tall, yall)
+        if 'LR-2' in models:
+            models['LR-2'].fit(xall, tall, yall)
+        if 'TARNet' in models:
+            models['TARNet'].fit(xtr, ttr, ytr, xva, tva, yva,
+                                epochs=epochs, lr=learning_rate, wd=wd,
+                                verbose=verbose)
+        if 'CEVAE' in models:
+            models['CEVAE'].fit(xtr, ttr, ytr, xva, tva, yva,
+                               epochs=epochs, lr=learning_rate, wd=wd,
+                               verbose=verbose)
 
         # -- Evaluate --
         for name, model in models.items():

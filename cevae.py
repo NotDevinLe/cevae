@@ -89,7 +89,7 @@ class CEVAE(nn.Module):
         mu_z0, sig_z0 = self.q_z_head0(hqz)
         mu_z1, sig_z1 = self.q_z_head1(hqz)
         mu_z = t * mu_z1 + (1 - t) * mu_z0
-        sig_z = t * sig_z1 + (1 - t) * sig_z0
+        sig_z = (t * sig_z1 + (1 - t) * sig_z0).clamp(min=1e-3)
         qz = Normal(mu_z, sig_z)
 
         return qt, qy, qz
@@ -99,6 +99,7 @@ class CEVAE(nn.Module):
         x_bin_logits = self.p_x_bin_head(hx) if self.p_x_bin_head else None
         if self.p_x_cont_head is not None:
             x_cont_mu, x_cont_sig = self.p_x_cont_head(hx)
+            x_cont_sig = x_cont_sig.clamp(min=1e-3)
         else:
             x_cont_mu, x_cont_sig = None, None
 
@@ -172,7 +173,7 @@ class CEVAE(nn.Module):
             mu_z0, sig_z0 = self.q_z_head0(hqz)
             mu_z1, sig_z1 = self.q_z_head1(hqz)
             mu_z = qt * mu_z1 + (1 - qt) * mu_z0
-            sig_z = qt * sig_z1 + (1 - qt) * sig_z0
+            sig_z = (qt * sig_z1 + (1 - qt) * sig_z0).clamp(min=1e-3)
             z = Normal(mu_z, sig_z).sample()
 
             y0s.append(self.decode(z, t0)[-1])
@@ -224,6 +225,7 @@ class CEVAE(nn.Module):
                 loss = self.forward(xtr_t[b], ttr_t[b], ytr_t[b])
                 optimizer.zero_grad()
                 loss.backward()
+                nn.utils.clip_grad_norm_(self.parameters(), max_norm=5.0)
                 optimizer.step()
 
             if epoch % check_every == 0 or epoch == epochs - 1:

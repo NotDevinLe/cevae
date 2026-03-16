@@ -1,5 +1,6 @@
 import numpy as np
 from sklearn.linear_model import LogisticRegression, LinearRegression
+from sklearn.preprocessing import StandardScaler
 
 
 class LR1:
@@ -13,10 +14,11 @@ class LR1:
     def __init__(self, outcome="binary"):
         self.outcome = outcome
         self.model = (
-            LogisticRegression(max_iter=10_000)
+            LogisticRegression(max_iter=10_000, C=0.01, solver="lbfgs")
             if outcome == "binary"
             else LinearRegression()
         )
+        self.scaler = StandardScaler()
 
     def fit(self, x, t, y):
         t_flat = t.ravel()

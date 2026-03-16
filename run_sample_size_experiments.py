@@ -1,6 +1,7 @@
-"""Run CEVAE, TARNet, LR-1, and LR-2 on synthetic data at varying sample sizes.
+"""Run causal inference models on synthetic data at varying sample sizes.
 
-Produces a plot of final test ATE error vs. sample size for all four models.
+Configure MODELS and LEARNING_RATE at the top. Produces a plot of test ATE
+error vs. sample size.
 """
 
 import numpy as np
@@ -12,8 +13,10 @@ from cevae_synthetic import run_experiment
 SAMPLE_SIZES = [500, 1000, 2000, 5000, 10000]
 SEED = 42
 EPOCHS = 100
+MODELS = ['LR-1', 'LR-2', 'CEVAE', 'TARNet']  # exclude CEVAE
+LEARNING_RATE = 1e-3
 
-model_names = ['CEVAE', 'TARNet', 'LR-1', 'LR-2']
+model_names = MODELS
 ate_results = {m: [] for m in model_names}
 
 for n in SAMPLE_SIZES:
@@ -21,8 +24,9 @@ for n in SAMPLE_SIZES:
     print(f"  Sample size n = {n}")
     print(f"{'='*60}")
 
-    dataset = SyntheticDataset(n=n, seed=SEED, replications=1)
-    scores = run_experiment(dataset, epochs=EPOCHS, verbose=False)
+    dataset = SyntheticDataset(n=n, seed=SEED, replications=5)
+    scores = run_experiment(dataset, epochs=EPOCHS, learning_rate=LEARNING_RATE,
+                            models=MODELS, verbose=False)
 
     for name in model_names:
         ate = scores[name][:, 1].mean()

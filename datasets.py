@@ -132,7 +132,7 @@ class SyntheticDataset(object):
             x = x[:, np.newaxis]
 
         t = rng.binomial(1, 0.75 * z + 0.25 * (1 - z))
-        prob = 1.0 / (1.0 + np.exp(-3 * (z + 2 * (2 * t - 1))))
+        prob = 1.0 / (1.0 + np.exp(-3 * (z + 2 * (t - 1))))
         y = rng.binomial(1, prob)
         return np.column_stack([z, x, t, y]).astype(np.float64)
 

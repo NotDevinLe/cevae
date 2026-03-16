@@ -69,7 +69,6 @@ def build_models(names, n_bin, n_cont, outcome):
     }
     return OrderedDict((n, factories[n]()) for n in names)
 
-
 def run(dataset, model_names, outcome, *, epochs=100, lr=1e-3, wd=1e-4,
         batch_size=100, verbose=True):
     """Train and evaluate *model_names* on *dataset*.
@@ -136,7 +135,7 @@ def run(dataset, model_names, outcome, *, epochs=100, lr=1e-3, wd=1e-4,
     return scores
 
 
-def run_jobs(dataset, model_names, *, epochs=100, lr=1e-3, wd=1e-4,
+def run_jobs(dataset, model_names, *, epochs=100, lr=1e-2, wd=1e-4,
              batch_size=100, verbose=True):
     """Train and evaluate *model_names* on the Jobs dataset.
 
